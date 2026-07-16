@@ -8,6 +8,8 @@ import json
 import random
 from pathlib import Path
 
+from tqdm.auto import tqdm
+
 from utils import ROOT, load_config, read_jsonl, write_jsonl
 
 
@@ -51,15 +53,22 @@ def main() -> None:
     names, probabilities = list(weights), list(weights.values())
     rng = random.Random(cfg["data"]["seed"] + (0 if args.stage == "a" else 1))
     emitted_tokens = 0
+    progress = tqdm(total=target, desc=f"mix stage {args.stage.upper()} {args.split}",
+                    unit="tok", unit_scale=True, dynamic_ncols=True, mininterval=0.5)
 
     def rows():
         nonlocal emitted_tokens
-        while emitted_tokens < target:
-            name = rng.choices(names, weights=probabilities, k=1)[0]
-            row = dict(streams[name].next())
-            row["sampled_for"] = f"stage_{args.stage}_{args.split}"
-            emitted_tokens += len(row["text"].split()) + 1
-            yield row
+        try:
+            while emitted_tokens < target:
+                name = rng.choices(names, weights=probabilities, k=1)[0]
+                row = dict(streams[name].next())
+                row["sampled_for"] = f"stage_{args.stage}_{args.split}"
+                added = len(row["text"].split()) + 1
+                emitted_tokens += added
+                progress.update(added)
+                yield row
+        finally:
+            progress.close()
 
     count = write_jsonl(output, rows())
     print(json.dumps({"output": str(output), "lines": count, "approx_tokens": emitted_tokens,

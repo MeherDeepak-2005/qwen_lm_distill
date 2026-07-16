@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import sentencepiece as spm
 import torch
+from tqdm.auto import tqdm
 
 from inference import load_student, ranking_metrics, score_record
 from runtime import DEVICE_CHOICES, print_device_report, resolve_device
@@ -35,16 +36,21 @@ def main() -> None:
     if checkpoint.get("tokenizer_sha256") != tokenizer_hash(args.tokenizer):
         raise RuntimeError("checkpoint/tokenizer hash mismatch")
     records = []
-    for row in read_jsonl(args.input):
+    for row in tqdm(read_jsonl(args.input), total=args.max_examples,
+                    desc="load quantization records", unit="row", dynamic_ncols=True):
         records.append(row)
         if len(records) >= args.max_examples:
             break
     if not records:
         raise RuntimeError("empty quantization evaluation set")
 
-    fp32 = [score_record(model, row, tokenizer, device) for row in records]
+    fp32 = [score_record(model, row, tokenizer, device) for row in tqdm(
+        records, desc="score FP32/QAT-master", unit="row", dynamic_ncols=True,
+    )]
     model.enable_qat(True)
-    int8 = [score_record(model, row, tokenizer, device) for row in records]
+    int8 = [score_record(model, row, tokenizer, device) for row in tqdm(
+        records, desc="score simulated int8", unit="row", dynamic_ncols=True,
+    )]
     fp_metrics, int8_metrics = ranking_metrics(fp32), ranking_metrics(int8)
     fp_top = [int(np.argmax(row.scores)) for row in fp32]
     int8_top = [int(np.argmax(row.scores)) for row in int8]

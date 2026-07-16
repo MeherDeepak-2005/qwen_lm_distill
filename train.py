@@ -14,6 +14,7 @@ from pathlib import Path
 import sentencepiece as spm
 import torch
 import torch.nn.functional as F
+from tqdm.auto import tqdm
 
 from datasets import packed_batches, record_batches
 from losses import distillation_loss
@@ -125,7 +126,10 @@ def main() -> None:
     model.train()
     optimizer.zero_grad(set_to_none=True)
     started = time.time()
-    for step in range(start_step, total_steps):
+    progress = tqdm(range(start_step, total_steps), total=total_steps, initial=start_step,
+                    desc=f"train {args.stage}", unit="step", dynamic_ncols=True,
+                    mininterval=0.5)
+    for step in progress:
         learning_rate = cosine_lr(step, total_steps, train_cfg["warmup_steps"], lr)
         for group in optimizer.param_groups:
             group["lr"] = learning_rate
@@ -162,16 +166,20 @@ def main() -> None:
 
         if running["loss"] < best_loss:
             best_loss = running["loss"]
+        progress.set_postfix(loss=f"{running['loss']:.4f}", lr=f"{learning_rate:.2e}",
+                             tokens=f"{tokens_seen / 1_000_000:.1f}M", refresh=False)
         if (step + 1) % 20 == 0 or step == start_step:
             elapsed = max(time.time() - started, 1e-6)
-            print(json.dumps({"stage": args.stage, "step": step + 1, "steps": total_steps,
-                              "micro_batch": batch_size, "accumulation": accumulation,
-                              "tokens": tokens_seen, "lr": learning_rate, **running,
-                              "steps_per_second": (step + 1 - start_step) / elapsed,
-                              "peak_device_mb": peak_memory_mb(device)}), flush=True)
+            tqdm.write(json.dumps({"stage": args.stage, "step": step + 1, "steps": total_steps,
+                                   "micro_batch": batch_size, "accumulation": accumulation,
+                                   "tokens": tokens_seen, "lr": learning_rate, **running,
+                                   "steps_per_second": (step + 1 - start_step) / elapsed,
+                                   "peak_device_mb": peak_memory_mb(device)}))
         if (step + 1) % train_cfg["checkpoint_every"] == 0:
+            tqdm.write(f"saving checkpoint: {args.output}")
             save_checkpoint(args.output, model, optimizer, step + 1, tokens_seen,
                             args.stage, cfg, args.tokenizer, best_loss)
+    progress.close()
     save_checkpoint(args.output, model, optimizer, total_steps, tokens_seen,
                     args.stage, cfg, args.tokenizer, best_loss)
     print(f"saved {args.output}; {count_parameters(model):,} parameters on {device}")

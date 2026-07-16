@@ -21,9 +21,13 @@ for source in "${SELECTED[@]}"; do
   fi
 done
 
-for command in curl unzip gzip tar find awk cut; do
+for command in curl unzip gzip tar find awk cut python; do
   command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 1; }
 done
+python -c "import tqdm" 2>/dev/null || {
+  echo "Python package tqdm is required; run: python -m pip install tqdm" >&2
+  exit 1
+}
 
 want() {
   local requested
@@ -42,7 +46,7 @@ fetch() {
     return
   fi
   echo "Downloading: $url"
-  curl --fail --location --retry 5 --retry-delay 2 --connect-timeout 30 \
+  curl --fail --location --retry 5 --retry-delay 2 --connect-timeout 30 --progress-bar \
        --continue-at - --output "$partial" "$url"
   [[ -s "$partial" ]] || { echo "Download produced an empty file: $partial" >&2; exit 1; }
   mv "$partial" "$output"
@@ -51,8 +55,10 @@ fetch() {
 if want nus_sms; then
   archive="$RAW/nus_sms_en_xml.zip"
   fetch "https://raw.githubusercontent.com/WING-NUS/nus-sms-corpus/master/smsCorpus_en_xml_2015.03.09_all.zip" "$archive"
-  unzip -tq "$archive" >/dev/null
+  echo "Validating NUS SMS archive..."
+  unzip -t "$archive"
   if [[ ! -s "$RAW/nus_sms.xml" ]]; then
+    echo "Extracting NUS SMS XML..."
     unzip -p "$archive" 'smsCorpus_en_2015.03.09_all.xml' > "$RAW/nus_sms.xml.tmp"
     mv "$RAW/nus_sms.xml.tmp" "$RAW/nus_sms.xml"
   fi
@@ -62,9 +68,11 @@ if want dailydialog; then
   archive="$RAW/dailydialog_raw.zip"
   directory="$RAW/dailydialog_extracted"
   fetch "https://linqs-data.soe.ucsc.edu/public/datasets/dailydialog/dailydialog-raw.zip" "$archive"
-  unzip -tq "$archive" >/dev/null
+  echo "Validating DailyDialog archive..."
+  unzip -t "$archive"
   mkdir -p "$directory"
-  unzip -oq "$archive" -d "$directory"
+  echo "Extracting DailyDialog..."
+  unzip -o "$archive" -d "$directory"
   find "$directory" -type f -name 'train.json' -print -quit | grep -q . || {
     echo "train.json missing from DailyDialog archive" >&2
     exit 1
@@ -73,11 +81,14 @@ fi
 
 if want opensubtitles; then
   archive="$RAW/opensubtitles_en.txt.gz"
-  echo "OpenSubtitles is approximately 3.66 GB compressed; it will be processed in-place."
+  echo "OpenSubtitles is approximately 3.66 GB compressed and will be fully extracted."
   fetch "https://object.pouta.csc.fi/OPUS-OpenSubtitles/v2018/mono/en.txt.gz" "$archive"
-  gzip -t "$archive"
-  if [[ "${KLM_EXTRACT_OPENSUBTITLES:-0}" == 1 && ! -s "$RAW/opensubtitles.txt" ]]; then
-    gzip -dc "$archive" > "$RAW/opensubtitles.txt.tmp"
+  compressed_bytes="$(wc -c < "$archive" | tr -d ' ')"
+  python -m tqdm --bytes --total "$compressed_bytes" --desc "Validate OpenSubtitles" \
+    < "$archive" | gzip -t
+  if [[ ! -s "$RAW/opensubtitles.txt" ]]; then
+    python -m tqdm --bytes --total "$compressed_bytes" --desc "Extract OpenSubtitles" \
+      < "$archive" | gzip -dc > "$RAW/opensubtitles.txt.tmp"
     mv "$RAW/opensubtitles.txt.tmp" "$RAW/opensubtitles.txt"
   fi
 fi
@@ -86,9 +97,11 @@ if want taskmaster; then
   archive="$RAW/taskmaster.zip"
   directory="$RAW/taskmaster"
   fetch "https://github.com/google-research-datasets/Taskmaster/archive/refs/heads/master.zip" "$archive"
-  unzip -tq "$archive" >/dev/null
+  echo "Validating Taskmaster archive..."
+  unzip -t "$archive"
   mkdir -p "$directory"
-  unzip -oq "$archive" -d "$directory"
+  echo "Extracting Taskmaster..."
+  unzip -o "$archive" -d "$directory"
   find "$directory" -type f -name '*.json' -print -quit | grep -q . || {
     echo "No JSON files found in extracted Taskmaster archive" >&2
     exit 1
@@ -120,9 +133,11 @@ if want leipzig; then
   archive="$RAW/eng_news_2024_1M.tar.gz"
   directory="$RAW/leipzig_extracted"
   fetch "https://downloads.wortschatz-leipzig.de/corpora/eng_news_2024_1M.tar.gz" "$archive"
-  tar -tzf "$archive" >/dev/null
+  echo "Validating Leipzig archive..."
+  tar -tzvf "$archive"
   mkdir -p "$directory"
-  tar -xzf "$archive" -C "$directory"
+  echo "Extracting Leipzig corpus..."
+  tar -xzvf "$archive" -C "$directory"
   sentence_file="$(find "$directory" -type f -name '*-sentences.txt' | sed -n '1p')"
   [[ -n "$sentence_file" ]] || { echo "Leipzig sentences file missing from archive" >&2; exit 1; }
   cut -f2- "$sentence_file" > "$RAW/leipzig.txt.tmp"

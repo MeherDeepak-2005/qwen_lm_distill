@@ -12,6 +12,7 @@ from collections import Counter
 from pathlib import Path
 
 import torch
+from tqdm.auto import tqdm
 
 from candidates import BigramCandidates, WORD, WordTrie, corrupt_word, merge_candidates
 from runtime import (DEVICE_CHOICES, configure_device, peak_memory_mb,
@@ -23,12 +24,16 @@ def build_indexes(corpus: Path, max_words: int = 100_000,
                   max_rows: int = 2_000_000) -> tuple[WordTrie, BigramCandidates]:
     frequencies: Counter[str] = Counter()
     ngrams = BigramCandidates()
-    for row_index, row in enumerate(read_jsonl(corpus)):
+    progress = tqdm(read_jsonl(corpus), total=max_rows, desc="build trie/ngram index",
+                    unit="row", dynamic_ncols=True, mininterval=0.5)
+    for row_index, row in enumerate(progress):
         if row_index >= max_rows:
             break
         words = [word.lower() for word in WORD.findall(row["text"])]
         frequencies.update(words)
         ngrams.observe(row["text"])
+    progress.close()
+    print(f"index ready: {len(frequencies):,} unique words", flush=True)
     trie = WordTrie()
     for word, frequency in frequencies.most_common(max_words):
         trie.insert(word, frequency)
@@ -63,15 +68,18 @@ class QwenTeacher:
                        "float32": torch.float32}[dtype]
         self.device = device
         self.dtype_name = dtype
+        print(f"loading teacher tokenizer: {model_id}", flush=True)
         self.tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
         if self.tokenizer.pad_token_id is None:
             if self.tokenizer.eos_token_id is None:
                 raise RuntimeError("teacher tokenizer has neither pad_token_id nor eos_token_id")
             self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.padding_side = "left"
+        print(f"loading teacher model on {device} as {dtype}", flush=True)
         self.model = AutoModelForCausalLM.from_pretrained(
             model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True,
         ).to(self.device).eval()
+        print("teacher model ready", flush=True)
 
     @staticmethod
     def first_word(text: str) -> str | None:
@@ -218,38 +226,44 @@ def main() -> None:
 
     def rows():
         count = 0
-        while count < max_examples:
-            batch = list(itertools.islice(selected, min(teacher_batch_size, max_examples - count)))
-            if not batch:
-                break
-            contexts = [item[1] for item in batch]
-            try:
-                qwen_batches = teacher.generate_batch(contexts, teacher_cfg["qwen_candidates"])
-                candidate_lists, source_lists = [], []
-                for (_, context, target, typed, _), qwen in zip(batch, qwen_batches):
-                    trie_words = trie.search(typed, max_distance=2, limit=teacher_cfg["trie_candidates"])
-                    ngram_words = ngrams.next_words(context, teacher_cfg["ngram_candidates"])
-                    candidates, sources = merge_candidates(
-                        target, {"trie": trie_words, "ngram": ngram_words, "qwen": qwen}, limit,
-                    )
-                    candidate_lists.append(candidates)
-                    source_lists.append(sources)
-                score_lists = teacher.score_batch(contexts, candidate_lists, score_micro_batch)
-            except torch.cuda.OutOfMemoryError as error:
-                if device.type == "cuda":
-                    torch.cuda.empty_cache()
-                raise RuntimeError(
-                    "teacher CUDA OOM; reduce --teacher-batch-size or --score-micro-batch"
-                ) from error
-            for item, candidates, sources, scores in zip(batch, candidate_lists, source_lists, score_lists):
-                source_row, context, target, typed, _ = item
-                yield {
-                    "mode": source_row.get("mode", "en"), "context": context,
-                    "typed": typed, "target": target, "candidates": candidates,
-                    "teacher_log_probs": [round(score, 6) for score in scores],
-                    "candidate_sources": sources, "source": source_row.get("source", "unknown"),
-                }
-                count += 1
+        progress = tqdm(total=max_examples, desc="cache teacher targets", unit="example",
+                        dynamic_ncols=True, mininterval=0.5)
+        try:
+            while count < max_examples:
+                batch = list(itertools.islice(selected, min(teacher_batch_size, max_examples - count)))
+                if not batch:
+                    break
+                contexts = [item[1] for item in batch]
+                try:
+                    qwen_batches = teacher.generate_batch(contexts, teacher_cfg["qwen_candidates"])
+                    candidate_lists, source_lists = [], []
+                    for (_, context, target, typed, _), qwen in zip(batch, qwen_batches):
+                        trie_words = trie.search(typed, max_distance=2, limit=teacher_cfg["trie_candidates"])
+                        ngram_words = ngrams.next_words(context, teacher_cfg["ngram_candidates"])
+                        candidates, sources = merge_candidates(
+                            target, {"trie": trie_words, "ngram": ngram_words, "qwen": qwen}, limit,
+                        )
+                        candidate_lists.append(candidates)
+                        source_lists.append(sources)
+                    score_lists = teacher.score_batch(contexts, candidate_lists, score_micro_batch)
+                except torch.cuda.OutOfMemoryError as error:
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
+                    raise RuntimeError(
+                        "teacher CUDA OOM; reduce --teacher-batch-size or --score-micro-batch"
+                    ) from error
+                for item, candidates, sources, scores in zip(batch, candidate_lists, source_lists, score_lists):
+                    source_row, context, target, typed, _ = item
+                    yield {
+                        "mode": source_row.get("mode", "en"), "context": context,
+                        "typed": typed, "target": target, "candidates": candidates,
+                        "teacher_log_probs": [round(score, 6) for score in scores],
+                        "candidate_sources": sources, "source": source_row.get("source", "unknown"),
+                    }
+                    count += 1
+                    progress.update(1)
+        finally:
+            progress.close()
 
     count = write_jsonl(args.output, rows())
     print(json.dumps({"output": str(args.output), "examples": count,

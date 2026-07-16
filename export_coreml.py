@@ -107,9 +107,11 @@ def main() -> None:
         ]
         coreml_outputs = [ct.TensorType(name="candidate_log_probs"), ct.TensorType(name="next_logits")]
         basename = "KeyboardLMScorer"
+    print("tracing PyTorch inference graph...", flush=True)
     with torch.inference_mode():
         traced = torch.jit.freeze(torch.jit.trace(wrapper, examples, strict=True))
 
+    print("converting traced graph to Core ML FP16...", flush=True)
     mlmodel = ct.convert(
         traced,
         convert_to="mlprogram",
@@ -129,11 +131,14 @@ def main() -> None:
     for path in (fp16_path, int8_path):
         if path.exists():
             shutil.rmtree(path)
+    print(f"saving FP16 package: {fp16_path}", flush=True)
     mlmodel.save(fp16_path)
     quant_config = OptimizationConfig(global_config=OpLinearQuantizerConfig(
         mode="linear_symmetric", dtype="int8", granularity="per_channel", weight_threshold=1024,
     ))
+    print("quantizing Core ML weights to per-channel int8...", flush=True)
     int8_model = linear_quantize_weights(mlmodel, config=quant_config)
+    print(f"saving int8 package: {int8_path}", flush=True)
     int8_model.save(int8_path)
 
     settings = load_config(args.config)["quantization"]

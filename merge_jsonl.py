@@ -14,7 +14,8 @@ def main() -> None:
     parser.add_argument("--inputs", nargs="+", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    count = write_jsonl(args.output, (row for path in args.inputs for row in read_jsonl(path)))
+    count = write_jsonl(args.output, (row for path in args.inputs for row in read_jsonl(path)),
+                        desc="merge teacher shards")
     print(f"wrote {count:,} rows to {args.output}")
 
 

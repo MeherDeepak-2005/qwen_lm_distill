@@ -120,7 +120,8 @@ def main() -> None:
                "dailydialog_jsonl": dailydialog_jsonl_rows,
                "gutenberg": gutenberg_rows,
                "nus_xml": nus_xml_rows, "taskmaster": taskmaster_rows}
-    count = write_jsonl(args.output, readers[args.format](args.input))
+    count = write_jsonl(args.output, readers[args.format](args.input),
+                        desc=f"convert {args.format}")
     if not count:
         raise RuntimeError(f"no rows converted from {args.input}")
     print(f"converted {count:,} utterances to {args.output}")

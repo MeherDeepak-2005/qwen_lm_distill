@@ -8,6 +8,8 @@ import random
 from pathlib import Path
 from typing import Iterable, Iterator
 
+from tqdm.auto import tqdm
+
 
 ROOT = Path(__file__).resolve().parent
 
@@ -29,12 +31,15 @@ def read_jsonl(path: str | Path) -> Iterator[dict]:
                 yield json.loads(line)
 
 
-def write_jsonl(path: str | Path, rows: Iterable[dict]) -> int:
+def write_jsonl(path: str | Path, rows: Iterable[dict], *, desc: str | None = None,
+                total: int | None = None) -> int:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
     with open_text(path, "wt") as f:
-        for row in rows:
+        stream = tqdm(rows, desc=desc, total=total, unit="row", dynamic_ncols=True,
+                      mininterval=0.5) if desc else rows
+        for row in stream:
             f.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
             count += 1
     return count

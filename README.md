@@ -86,7 +86,7 @@ python convert_source.py --format dailydialog_jsonl --input data/raw/dailydialog
 python convert_source.py --format plain --input data/raw/leipzig.txt --output data/raw/leipzig.jsonl
 python convert_source.py --format nus_xml --input data/raw/nus_sms.xml --output data/raw/nus_sms.jsonl
 
-python prepare_data.py --source opensubtitles --input data/raw/opensubtitles_en.txt.gz \
+python prepare_data.py --source opensubtitles --input data/raw/opensubtitles.txt \
   --mode en --keep-fraction 0.04
 
 for source in taskmaster gutenberg_dialogue dailydialog leipzig nus_sms; do
@@ -96,8 +96,10 @@ done
 
 The deterministic 4% OpenSubtitles sample is still roughly 17 million raw lines,
 enough for its 90M-token Stage-A allocation. Split files are streamed directly to
-disk and gzip is decompressed as it is read, so no full uncompressed subtitle copy
-is created. Set `KLM_EXTRACT_OPENSUBTITLES=1` only if you deliberately want one.
+disk. The downloader now fully extracts every archive and reports download and
+extraction progress. Normalization, mixing, tokenizer sampling, teacher caching,
+training, evaluation, quantization verification, and Core ML benchmarking also
+show live progress bars.
 
 Conversation IDs keep all turns from one dialogue in the same split. The English
 cleaner preserves apostrophes: `we'll` remains different from `well`. Whole-word

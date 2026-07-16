@@ -9,6 +9,7 @@ from pathlib import Path
 
 import sentencepiece as spm
 import torch
+from tqdm.auto import tqdm
 
 from inference import load_student, ranking_metrics, score_record
 from runtime import DEVICE_CHOICES, print_device_report, resolve_device
@@ -44,14 +45,17 @@ def main() -> None:
     if checkpoint.get("tokenizer_sha256") != tokenizer_hash(args.tokenizer):
         raise RuntimeError("checkpoint/tokenizer hash mismatch")
     records = []
-    for row in read_jsonl(args.input):
+    for row in tqdm(read_jsonl(args.input), total=args.max_examples,
+                    desc="load evaluation records", unit="row", dynamic_ncols=True):
         records.append(row)
         if len(records) >= args.max_examples:
             break
     if not records:
         raise RuntimeError(f"no evaluation records in {args.input}")
 
-    scored = [score_record(model, row, tokenizer, device) for row in records]
+    scored = [score_record(model, row, tokenizer, device) for row in tqdm(
+        records, desc="score evaluation records", unit="row", dynamic_ncols=True,
+    )]
     result = {
         "checkpoint": str(args.checkpoint),
         "candidate_recall": candidate_recall(records),

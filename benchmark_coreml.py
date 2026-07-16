@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+from tqdm.auto import tqdm
 
 
 def package_bytes(path: Path) -> int:
@@ -42,10 +43,10 @@ def main() -> None:
             })
         return value
 
-    for _ in range(args.warmup):
+    for _ in tqdm(range(args.warmup), desc="Core ML warmup", unit="run", dynamic_ncols=True):
         model.predict(inputs())
     elapsed = []
-    for _ in range(args.iterations):
+    for _ in tqdm(range(args.iterations), desc="Core ML benchmark", unit="run", dynamic_ncols=True):
         started = time.perf_counter_ns()
         model.predict(inputs())
         elapsed.append((time.perf_counter_ns() - started) / 1e6)

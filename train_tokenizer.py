@@ -7,6 +7,7 @@ import random
 from pathlib import Path
 
 import sentencepiece as spm
+from tqdm.auto import tqdm
 
 from utils import ROOT, read_jsonl
 
@@ -48,6 +49,8 @@ def main() -> None:
     rng = random.Random(args.seed)
     count = 0
     with sample.open("w", encoding="utf-8") as out:
+        progress = tqdm(total=args.sample_lines, desc="build tokenizer sample",
+                        unit="line", dynamic_ncols=True, mininterval=0.5)
         while count < args.sample_lines:
             stream = rng.choices(streams, weights=weights, k=1)[0]
             row = stream.next()
@@ -55,9 +58,12 @@ def main() -> None:
             tag = {"en": "<en>", "te": "<te>", "xlit": "<xlit>"}[mode]
             out.write(f"{tag} {row['text']}\n")
             count += 1
+            progress.update(1)
+        progress.close()
     if count < 1000:
         raise RuntimeError(f"only {count} tokenizer lines; provide a real corpus")
 
+    print(f"training SentencePiece unigram model from {count:,} sampled lines", flush=True)
     spm.SentencePieceTrainer.train(
         input=str(sample), model_prefix=str(prefix), model_type="unigram",
         vocab_size=args.vocab_size, character_coverage=0.9999, byte_fallback=True,
@@ -66,6 +72,7 @@ def main() -> None:
         pad_id=3, unk_id=0, bos_id=1, eos_id=2,
         input_sentence_size=min(count, args.sample_lines), shuffle_input_sentence=True,
     )
+    print("SentencePiece training complete", flush=True)
     metadata = {"lines": count, "vocab_size": args.vocab_size,
                 "inputs": args.input, "input_weights": weights,
                 "future_modes": ["en", "te", "xlit"]}

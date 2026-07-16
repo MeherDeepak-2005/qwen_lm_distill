@@ -12,6 +12,8 @@ import re
 from pathlib import Path
 from typing import Iterator
 
+from tqdm.auto import tqdm
+
 from utils import ROOT, stable_fraction
 
 
@@ -76,7 +78,10 @@ def main() -> None:
     counts = {split: 0 for split in paths}
     dropped = sampled_out = scanned = 0
     try:
-        for group, raw in source_lines(args.input, args.text_key):
+        progress = tqdm(source_lines(args.input, args.text_key),
+                        desc=f"normalize {args.source}", unit="line",
+                        dynamic_ncols=True, mininterval=0.5)
+        for group, raw in progress:
             scanned += 1
             if stable_fraction(f"sample:{args.source}:{group}", args.seed) >= args.keep_fraction:
                 sampled_out += 1
@@ -99,6 +104,9 @@ def main() -> None:
                    "group_id": group, "text": text}
             streams[split].write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
             counts[split] += 1
+            if scanned % 10_000 == 0:
+                progress.set_postfix(kept=sum(counts.values()), dropped=dropped,
+                                     sampled=sampled_out, refresh=False)
     finally:
         for stream in streams.values():
             stream.close()
