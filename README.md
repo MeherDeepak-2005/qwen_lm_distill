@@ -43,6 +43,18 @@ python -m pip install -r requirements-kaggle.txt
 python check_runtime.py --device cuda --precision auto
 ```
 
+If Kaggle assigns a Tesla P100 and the runtime check says `sm_60` is missing,
+replace Kaggle's CUDA 12.8 PyTorch wheel with the CUDA 12.6 build, which retains
+Pascal support. The project does not need torchvision or torchaudio:
+
+```bash
+python -m pip uninstall -y torch torchvision torchaudio
+python -m pip install --no-cache-dir torch==2.11.0 \
+  --index-url https://download.pytorch.org/whl/cu126
+python -c "import torch; print(torch.__version__, torch.cuda.get_arch_list()); print(torch.ones(1, device='cuda'))"
+python check_runtime.py --device cuda --precision fp16
+```
+
 `requirements-kaggle.txt` deliberately does not reinstall PyTorch, preserving
 Kaggle's CUDA-enabled build. `/kaggle/input` is read-only; datasets, checkpoints,
 and teacher shards must be written under `/kaggle/working`. This implementation is
@@ -74,7 +86,7 @@ python convert_source.py --format dailydialog_jsonl --input data/raw/dailydialog
 python convert_source.py --format plain --input data/raw/leipzig.txt --output data/raw/leipzig.jsonl
 python convert_source.py --format nus_xml --input data/raw/nus_sms.xml --output data/raw/nus_sms.jsonl
 
-python prepare_data.py --source opensubtitles --input data/raw/opensubtitles.txt \
+python prepare_data.py --source opensubtitles --input data/raw/opensubtitles_en.txt.gz \
   --mode en --keep-fraction 0.04
 
 for source in taskmaster gutenberg_dialogue dailydialog leipzig nus_sms; do
@@ -84,7 +96,8 @@ done
 
 The deterministic 4% OpenSubtitles sample is still roughly 17 million raw lines,
 enough for its 90M-token Stage-A allocation. Split files are streamed directly to
-disk, so preprocessing no longer stores all accepted rows in RAM.
+disk and gzip is decompressed as it is read, so no full uncompressed subtitle copy
+is created. Set `KLM_EXTRACT_OPENSUBTITLES=1` only if you deliberately want one.
 
 Conversation IDs keep all turns from one dialogue in the same split. The English
 cleaner preserves apostrophes: `we'll` remains different from `well`. Whole-word

@@ -1,4 +1,5 @@
 import json
+import gzip
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,26 @@ class PrepareDataTests(unittest.TestCase):
                     for split in ("train", "dev", "test")
                 ))
             self.assertEqual(hashes[0], hashes[1])
+
+    def test_plain_gzip_input(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            raw = base / "raw.txt.gz"
+            with gzip.open(raw, "wt", encoding="utf-8") as stream:
+                stream.write("are you coming home tonight\n")
+                stream.write("please call me after dinner\n")
+            output = base / "processed"
+            subprocess.run([
+                sys.executable, str(ROOT / "prepare_data.py"),
+                "--source", "gzip_smoke", "--input", str(raw),
+                "--output-dir", str(output), "--dev-fraction", "0.01",
+                "--test-fraction", "0.01",
+            ], check=True, capture_output=True, text=True)
+            rows = sum(
+                (output / f"gzip_smoke.{split}.jsonl").read_text().count("\n")
+                for split in ("train", "dev", "test")
+            )
+            self.assertEqual(rows, 2)
 
 
 if __name__ == "__main__":

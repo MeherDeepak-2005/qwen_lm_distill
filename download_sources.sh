@@ -73,10 +73,10 @@ fi
 
 if want opensubtitles; then
   archive="$RAW/opensubtitles_en.txt.gz"
-  echo "OpenSubtitles is approximately 3.66 GB compressed and needs substantial extraction space."
+  echo "OpenSubtitles is approximately 3.66 GB compressed; it will be processed in-place."
   fetch "https://object.pouta.csc.fi/OPUS-OpenSubtitles/v2018/mono/en.txt.gz" "$archive"
   gzip -t "$archive"
-  if [[ ! -s "$RAW/opensubtitles.txt" ]]; then
+  if [[ "${KLM_EXTRACT_OPENSUBTITLES:-0}" == 1 && ! -s "$RAW/opensubtitles.txt" ]]; then
     gzip -dc "$archive" > "$RAW/opensubtitles.txt.tmp"
     mv "$RAW/opensubtitles.txt.tmp" "$RAW/opensubtitles.txt"
   fi
@@ -131,7 +131,7 @@ fi
 
 echo
 echo "Downloads prepared under: $RAW"
-for output in nus_sms.xml dailydialog_extracted opensubtitles.txt taskmaster gutenberg_dialogue.txt leipzig.txt; do
+for output in nus_sms.xml dailydialog_extracted opensubtitles_en.txt.gz opensubtitles.txt taskmaster gutenberg_dialogue.txt leipzig.txt; do
   [[ -e "$RAW/$output" ]] && du -sh "$RAW/$output"
 done
 echo "Next: follow README.md section 'Convert and normalize downloads'."

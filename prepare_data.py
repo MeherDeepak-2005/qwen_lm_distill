@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
@@ -29,8 +30,10 @@ def clean_english(text: str, min_words: int, max_words: int) -> str | None:
 
 def source_lines(path: Path, text_key: str) -> Iterator[tuple[str, str]]:
     """Stream (group_id, text). JSONL group IDs prevent conversation leakage."""
-    if path.suffix == ".jsonl":
-        with path.open(encoding="utf-8") as stream:
+    opener = gzip.open if path.suffix == ".gz" else Path.open
+    open_kwargs = {"mode": "rt", "encoding": "utf-8", "errors": "replace"}
+    if path.name.endswith((".jsonl", ".jsonl.gz")):
+        with opener(path, **open_kwargs) as stream:
             for index, line in enumerate(stream):
                 if not line.strip():
                     continue
@@ -39,7 +42,7 @@ def source_lines(path: Path, text_key: str) -> Iterator[tuple[str, str]]:
                 group = str(row.get("conversation_id", row.get("group_id", index)))
                 yield group, text
     else:
-        with path.open(encoding="utf-8", errors="replace") as stream:
+        with opener(path, **open_kwargs) as stream:
             for index, line in enumerate(stream):
                 yield str(index), line
 

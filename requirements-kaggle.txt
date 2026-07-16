@@ -1,4 +1,5 @@
-# Kaggle already supplies a CUDA-enabled PyTorch build; do not replace it.
+# PyTorch is intentionally omitted. Keep Kaggle's build on T4/L4, or install
+# the CUDA 12.6 wheel from README.md when Kaggle assigns a Pascal P100.
 transformers>=4.51,<5
 sentencepiece>=0.2
 numpy>=1.26,<3
