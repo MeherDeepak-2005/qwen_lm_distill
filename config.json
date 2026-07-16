@@ -1,0 +1,76 @@
+{
+  "model": {
+    "vocab_size": 6000,
+    "d_model": 384,
+    "layers": 6,
+    "heads": 6,
+    "ffn_dim": 1024,
+    "max_length": 32,
+    "dropout": 0.05,
+    "mode_symbols": ["<en>", "<te>", "<xlit>"]
+  },
+  "data": {
+    "stage_a_target_tokens": 200000000,
+    "stage_b_target_tokens": 20000000,
+    "min_words": 3,
+    "max_words": 40,
+    "seed": 17,
+    "stage_a_weights": {
+      "opensubtitles": 0.45,
+      "taskmaster": 0.15,
+      "gutenberg_dialogue": 0.15,
+      "dailydialog": 0.10,
+      "leipzig": 0.15
+    },
+    "stage_b_weights": {
+      "nus_sms": 0.55,
+      "dailydialog": 0.20,
+      "opensubtitles": 0.15,
+      "taskmaster": 0.10
+    }
+  },
+  "teacher": {
+    "model_id": "Qwen/Qwen3-1.7B-Base",
+    "fallback_model_id": "Qwen/Qwen3-0.6B-Base",
+    "device": "auto",
+    "dtype": "auto",
+    "temperature": 2.0,
+    "candidate_limit": 16,
+    "qwen_candidates": 8,
+    "trie_candidates": 8,
+    "ngram_candidates": 8,
+    "max_context_words": 12,
+    "max_examples": 500000,
+    "batch_size": 8,
+    "score_micro_batch": 32,
+    "index_max_rows": 2000000
+  },
+  "training": {
+    "device": "auto",
+    "precision": "auto",
+    "micro_batch_sequences": 32,
+    "gradient_accumulation": 16,
+    "pretrain_lr": 0.0003,
+    "distill_lr": 0.00008,
+    "finetune_lr": 0.00004,
+    "warmup_steps": 2000,
+    "weight_decay": 0.01,
+    "grad_clip": 1.0,
+    "hard_loss_weight": 0.65,
+    "soft_loss_weight": 0.30,
+    "sequence_loss_weight": 0.05,
+    "sequence_kd_every": 8,
+    "sequence_kd_candidates": 8,
+    "checkpoint_every": 1000,
+    "eval_every": 500,
+    "seed": 17
+  },
+  "quantization": {
+    "max_package_mb": 12.0,
+    "max_top3_absolute_drop": 0.01,
+    "max_mrr_relative_drop": 0.01,
+    "min_top1_agreement": 0.99,
+    "min_score_correlation": 0.995,
+    "qat_fraction": 0.08
+  }
+}

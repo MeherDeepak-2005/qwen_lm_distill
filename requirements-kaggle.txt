@@ -1,0 +1,4 @@
+# Kaggle already supplies a CUDA-enabled PyTorch build; do not replace it.
+transformers>=4.51,<5
+sentencepiece>=0.2
+numpy>=1.26,<3

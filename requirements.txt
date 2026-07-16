@@ -1,0 +1,5 @@
+torch>=2.7,<2.8
+transformers>=4.51
+sentencepiece>=0.2
+numpy>=1.26,<3
+coremltools>=9.0; platform_system == "Darwin"
