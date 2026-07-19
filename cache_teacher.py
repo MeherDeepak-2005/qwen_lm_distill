@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import itertools
 import json
 import math
-import os
+import shutil
 from collections import Counter
 from pathlib import Path
 
@@ -201,27 +202,24 @@ def main() -> None:
     parser.add_argument("--num-shards", type=int, default=1)
     parser.add_argument("--mock-teacher", action="store_true", help="Smoke tests only")
     parser.add_argument("--resume", action="store_true",
-                        help="Skip this atomically-written shard when it already exists")
+                        help="Resume this shard from durable batch checkpoints")
+    parser.add_argument("--checkpoint-examples", type=int, default=100,
+                        help="Atomically checkpoint this many cached examples (default: 100)")
     args = parser.parse_args()
     if args.resume and args.output.exists():
         print(f"resume: teacher shard already completed: {args.output}")
         return
     if args.num_shards < 1 or not 0 <= args.shard_index < args.num_shards:
         raise ValueError("require 0 <= shard-index < num-shards")
+    if args.checkpoint_examples < 1:
+        raise ValueError("checkpoint-examples must be positive")
 
     cfg = load_config(args.config)
     teacher_cfg = cfg["teacher"]
-    device = resolve_device(args.device or teacher_cfg["device"])
-    configure_device(device)
-    print_device_report(device, teacher_cfg["dtype"])
     index_max_rows = args.index_max_rows or teacher_cfg.get("index_max_rows", 2_000_000)
-    trie, ngrams = build_indexes(args.index_corpus or args.input, max_rows=index_max_rows)
     teacher_model_id = (args.model_id or
                         teacher_cfg.get("model_by_mode", {}).get(args.mode) or
                         teacher_cfg["model_id"])
-    teacher = MockTeacher() if args.mock_teacher else QwenTeacher(
-        teacher_model_id, device, teacher_cfg["dtype"],
-    )
     limit = teacher_cfg["candidate_limit"]
     max_examples = args.max_examples or teacher_cfg["max_examples"]
     teacher_batch_size = args.teacher_batch_size or teacher_cfg.get("batch_size", 1)
@@ -229,15 +227,86 @@ def main() -> None:
     if teacher_batch_size < 1 or score_micro_batch < 1:
         raise ValueError("teacher batch sizes must be positive")
 
-    selected = (
-        item for item in examples(args.input, teacher_cfg["max_context_words"], cfg["training"]["seed"])
-        if item[4] % args.num_shards == args.shard_index
-        and (args.mode is None or item[0].get("mode", "en") == args.mode)
-    )
+    # Each part is complete and atomic. A process interruption can therefore lose
+    # at most the currently-running part instead of regenerating the whole shard.
+    parts_dir = args.output.parent / f".{args.output.name}.parts"
+    if not args.resume:
+        shutil.rmtree(parts_dir, ignore_errors=True)
+    parts_dir.mkdir(parents=True, exist_ok=True)
+
+    def valid_rows(path: Path):
+        """Yield all complete JSON rows, including from a truncated legacy gzip."""
+        opener = gzip.open if path.suffix == ".gz" else open
+        try:
+            with opener(path, "rt", encoding="utf-8") as stream:
+                while True:
+                    try:
+                        line = stream.readline()
+                    except (EOFError, gzip.BadGzipFile):
+                        break
+                    if not line:
+                        break
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:
+                        break
+        except (EOFError, gzip.BadGzipFile):
+            return
+
+    part_paths = sorted(parts_dir.glob("part_*.jsonl.gz"))
+    completed = sum(1 for path in part_paths for _ in read_jsonl(path))
+
+    # Older versions wrote one .partial.gz file. Recover its complete rows once,
+    # then continue with the new per-batch checkpoint format.
+    legacy_partial = (args.output.with_name(args.output.name[:-3] + ".partial.gz")
+                      if args.output.suffix == ".gz"
+                      else args.output.with_name(args.output.name + ".partial"))
+    if args.resume and completed == 0 and legacy_partial.exists():
+        recovered_path = parts_dir / "part_000000.jsonl.gz"
+        recovered = write_jsonl(recovered_path, valid_rows(legacy_partial), atomic=True)
+        if recovered:
+            part_paths = [recovered_path]
+            completed = recovered
+            print(f"resume: recovered {recovered:,} examples from {legacy_partial}", flush=True)
+        else:
+            recovered_path.unlink(missing_ok=True)
+        legacy_partial.unlink(missing_ok=True)
+
+    if completed > max_examples:
+        raise RuntimeError(
+            f"checkpoint has {completed:,} examples but --max-examples is {max_examples:,}"
+        )
+    if completed:
+        print(f"resume: shard contains {completed:,}/{max_examples:,} examples", flush=True)
+
+    if completed < max_examples:
+        device = resolve_device(args.device or teacher_cfg["device"])
+        configure_device(device)
+        print_device_report(device, teacher_cfg["dtype"])
+        trie, ngrams = build_indexes(args.index_corpus or args.input, max_rows=index_max_rows)
+        teacher = MockTeacher() if args.mock_teacher else QwenTeacher(
+            teacher_model_id, device, teacher_cfg["dtype"],
+        )
+        selected = (
+            item for item in examples(
+                args.input, teacher_cfg["max_context_words"], cfg["training"]["seed"]
+            )
+            if item[4] % args.num_shards == args.shard_index
+            and (args.mode is None or item[0].get("mode", "en") == args.mode)
+        )
+        selected = itertools.islice(selected, completed, None)
+    else:
+        # The recovered partial already contains the full shard; finalize it
+        # without loading the several-gigabyte teacher again.
+        device = torch.device("cpu")
+        trie = ngrams = None
+        teacher = None
+        selected = iter(())
 
     def rows():
-        count = 0
-        progress = tqdm(total=max_examples, desc="cache teacher targets", unit="example",
+        count = completed
+        progress = tqdm(total=max_examples, initial=completed,
+                        desc="cache teacher targets", unit="example",
                         dynamic_ncols=True, mininterval=0.5)
         try:
             while count < max_examples:
@@ -265,7 +334,7 @@ def main() -> None:
                     ) from error
                 for item, candidates, sources, scores in zip(batch, candidate_lists, source_lists, score_lists):
                     source_row, context, target, typed, _ = item
-                    yield {
+                    row = {
                         "mode": source_row.get("mode", "en"), "context": context,
                         "typed": typed, "target": target, "candidates": candidates,
                         "teacher_log_probs": [round(score, 6) for score in scores],
@@ -273,15 +342,35 @@ def main() -> None:
                     }
                     count += 1
                     progress.update(1)
+                    yield row
         finally:
             progress.close()
 
-    temporary = (args.output.with_name(args.output.name[:-3] + ".partial.gz")
-                 if args.output.suffix == ".gz"
-                 else args.output.with_name(args.output.name + ".partial"))
-    temporary.unlink(missing_ok=True)
-    count = write_jsonl(temporary, rows())
-    os.replace(temporary, args.output)
+    generated = rows()
+    next_part = len(part_paths)
+    while completed < max_examples:
+        part = parts_dir / f"part_{next_part:06d}.jsonl.gz"
+        count = write_jsonl(
+            part,
+            itertools.islice(generated, min(args.checkpoint_examples, max_examples - completed)),
+            atomic=True,
+        )
+        if count == 0:
+            part.unlink(missing_ok=True)
+            break
+        completed += count
+        part_paths.append(part)
+        next_part += 1
+        print(f"checkpoint: {completed:,}/{max_examples:,} examples", flush=True)
+
+    count = write_jsonl(
+        args.output,
+        (row for path in part_paths for row in read_jsonl(path)),
+        desc="finalize teacher shard",
+        total=completed,
+        atomic=True,
+    )
+    shutil.rmtree(parts_dir)
     print(json.dumps({"output": str(args.output), "examples": count,
                       "teacher": "mock" if args.mock_teacher else teacher_model_id,
                       "teacher_dtype": getattr(teacher, "dtype_name", None),

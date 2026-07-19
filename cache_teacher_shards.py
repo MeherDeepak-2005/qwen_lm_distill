@@ -28,6 +28,8 @@ def main() -> None:
     parser.add_argument("--mode", choices=("en", "te", "xlit"))
     parser.add_argument("--teacher-batch-size", type=int, default=4)
     parser.add_argument("--score-micro-batch", type=int, default=16)
+    parser.add_argument("--checkpoint-examples", type=int, default=100,
+                        help="Examples per durable within-shard checkpoint")
     parser.add_argument("--index-max-rows", type=int)
     parser.add_argument("--mock-teacher", action="store_true")
     args = parser.parse_args()
@@ -55,6 +57,7 @@ def main() -> None:
             "--max-examples", str(count),
             "--teacher-batch-size", str(args.teacher_batch_size),
             "--score-micro-batch", str(args.score_micro_batch), "--resume",
+            "--checkpoint-examples", str(args.checkpoint_examples),
         ]
         if args.index_corpus:
             command.extend(["--index-corpus", str(args.index_corpus)])
