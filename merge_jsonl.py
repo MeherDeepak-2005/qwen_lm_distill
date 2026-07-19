@@ -13,9 +13,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--inputs", nargs="+", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
+    if args.resume and args.output.exists():
+        print(f"resume: already completed {args.output}")
+        return
     count = write_jsonl(args.output, (row for path in args.inputs for row in read_jsonl(path)),
-                        desc="merge teacher shards")
+                        desc="merge teacher shards", atomic=True)
     print(f"wrote {count:,} rows to {args.output}")
 
 

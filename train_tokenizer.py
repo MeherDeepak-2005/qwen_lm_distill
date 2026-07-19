@@ -37,9 +37,16 @@ def main() -> None:
     parser.add_argument("--vocab-size", type=int, default=6000)
     parser.add_argument("--sample-lines", type=int, default=4_000_000)
     parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument("--resume", action="store_true",
+                        help="Skip when model, vocabulary, and metadata already exist")
     args = parser.parse_args()
 
     prefix = Path(args.output_prefix)
+    completed = [prefix.with_suffix(".model"), prefix.with_suffix(".vocab"),
+                 prefix.parent / "tokenizer_metadata.json"]
+    if args.resume and all(path.exists() for path in completed):
+        print(f"resume: tokenizer already completed at {prefix}")
+        return
     weights = args.input_weights or [1.0] * len(args.input)
     if len(weights) != len(args.input) or any(weight <= 0 for weight in weights):
         raise ValueError("--input-weights must contain one positive value per --input")

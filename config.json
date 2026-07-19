@@ -32,6 +32,11 @@
   "teacher": {
     "model_id": "Qwen/Qwen3-1.7B-Base",
     "fallback_model_id": "Qwen/Qwen3-0.6B-Base",
+    "model_by_mode": {
+      "en": "Qwen/Qwen3-1.7B-Base",
+      "te": "Qwen/Qwen3-4B-Base",
+      "xlit": "Qwen/Qwen3-4B-Base"
+    },
     "device": "auto",
     "dtype": "auto",
     "temperature": 2.0,

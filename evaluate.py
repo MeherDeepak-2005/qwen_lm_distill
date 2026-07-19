@@ -36,7 +36,11 @@ def main() -> None:
     parser.add_argument("--device", choices=DEVICE_CHOICES, default="auto")
     parser.add_argument("--max-examples", type=int, default=5000)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
+    if args.resume and args.output and args.output.exists():
+        print(f"resume: evaluation already completed: {args.output}")
+        return
 
     device = resolve_device(args.device)
     print_device_report(device)

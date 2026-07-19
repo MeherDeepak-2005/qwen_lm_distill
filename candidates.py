@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-import re
 from collections import Counter, defaultdict
 from typing import Iterable
 
+import regex as re
 
-WORD = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?")
+
+# Unicode letters with one optional apostrophe-delimited suffix. This supports
+# English contractions, Telugu script, and Latin-script Tenglish.
+WORD = re.compile(r"\p{L}[\p{L}\p{M}]*(?:['’]\p{L}[\p{L}\p{M}]*)?")
 
 
 class TrieNode:
@@ -78,7 +81,7 @@ def corrupt_word(word: str, seed_value: int) -> str:
     """Deterministic one-edit typo used to measure trie candidate recall."""
     if len(word) < 3:
         return word
-    operation = seed_value % 3
+    operation = seed_value % (3 if word.isascii() else 2)
     position = (seed_value // 3) % len(word)
     if operation == 0 and len(word) > 3:
         return word[:position] + word[position + 1:]

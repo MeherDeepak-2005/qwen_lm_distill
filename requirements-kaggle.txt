@@ -4,3 +4,4 @@ transformers>=4.51,<5
 sentencepiece>=0.2
 numpy>=1.26,<3
 tqdm>=4.66
+regex>=2024.11

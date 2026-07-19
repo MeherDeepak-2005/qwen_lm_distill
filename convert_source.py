@@ -115,13 +115,18 @@ def main() -> None:
                                               "gutenberg", "nus_xml", "taskmaster"), required=True)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--resume", action="store_true",
+                        help="Skip conversion when the final atomic output already exists")
     args = parser.parse_args()
+    if args.resume and args.output.exists():
+        print(f"resume: already completed {args.output}")
+        return
     readers = {"plain": plain_rows, "dailydialog": dailydialog_rows,
                "dailydialog_jsonl": dailydialog_jsonl_rows,
                "gutenberg": gutenberg_rows,
                "nus_xml": nus_xml_rows, "taskmaster": taskmaster_rows}
     count = write_jsonl(args.output, readers[args.format](args.input),
-                        desc=f"convert {args.format}")
+                        desc=f"convert {args.format}", atomic=True)
     if not count:
         raise RuntimeError(f"no rows converted from {args.input}")
     print(f"converted {count:,} utterances to {args.output}")

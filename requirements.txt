@@ -3,4 +3,5 @@ transformers>=4.51
 sentencepiece>=0.2
 numpy>=1.26,<3
 tqdm>=4.66
+regex>=2024.11
 coremltools>=9.0; platform_system == "Darwin"

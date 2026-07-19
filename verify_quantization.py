@@ -27,7 +27,12 @@ def main() -> None:
     parser.add_argument("--device", choices=DEVICE_CHOICES, default="auto")
     parser.add_argument("--max-examples", type=int, default=2000)
     parser.add_argument("--no-enforce", action="store_true")
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
+    if args.resume and args.output and args.output.exists():
+        print(f"resume: quantization verification already completed: {args.output}")
+        return
 
     device = resolve_device(args.device)
     print_device_report(device)
@@ -73,7 +78,13 @@ def main() -> None:
               "top1_agreement": agreement, "score_correlation": correlation,
               "checks": checks, "passed": all(checks.values()),
               "warning": "This gates weight quantization numerically. Run export_coreml.py --smoke-predict to also test the deployed Core ML graph."}
-    print(json.dumps(result, indent=2))
+    encoded = json.dumps(result, indent=2)
+    print(encoded)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = args.output.with_suffix(args.output.suffix + ".tmp")
+        temporary.write_text(encoded + "\n")
+        temporary.replace(args.output)
     if not result["passed"] and not args.no_enforce:
         raise SystemExit("int8 quality gate failed; run QAT and re-evaluate")
 

@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import math
+import os
 import random
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -32,16 +33,20 @@ def read_jsonl(path: str | Path) -> Iterator[dict]:
 
 
 def write_jsonl(path: str | Path, rows: Iterable[dict], *, desc: str | None = None,
-                total: int | None = None) -> int:
+                total: int | None = None, atomic: bool = False) -> int:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    destination = (path.with_name(f".{path.name}.partial{path.suffix}")
+                   if atomic else path)
     count = 0
-    with open_text(path, "wt") as f:
+    with open_text(destination, "wt") as f:
         stream = tqdm(rows, desc=desc, total=total, unit="row", dynamic_ncols=True,
                       mininterval=0.5) if desc else rows
         for row in stream:
             f.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
             count += 1
+    if atomic:
+        os.replace(destination, path)
     return count
 
 

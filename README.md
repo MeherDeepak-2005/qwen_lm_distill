@@ -80,17 +80,17 @@ filenames below. If you downloaded the corpora yourself, put them under `data/ra
 and adjust the example filenames as necessary:
 
 ```bash
-python convert_source.py --format taskmaster --input data/raw/taskmaster --output data/raw/taskmaster.jsonl
-python convert_source.py --format gutenberg --input data/raw/gutenberg_dialogue.txt --output data/raw/gutenberg_dialogue.jsonl
-python convert_source.py --format dailydialog_jsonl --input data/raw/dailydialog_extracted --output data/raw/dailydialog.jsonl
-python convert_source.py --format plain --input data/raw/leipzig.txt --output data/raw/leipzig.jsonl
-python convert_source.py --format nus_xml --input data/raw/nus_sms.xml --output data/raw/nus_sms.jsonl
+python convert_source.py --format taskmaster --input data/raw/taskmaster --output data/raw/taskmaster.jsonl --resume
+python convert_source.py --format gutenberg --input data/raw/gutenberg_dialogue.txt --output data/raw/gutenberg_dialogue.jsonl --resume
+python convert_source.py --format dailydialog_jsonl --input data/raw/dailydialog_extracted --output data/raw/dailydialog.jsonl --resume
+python convert_source.py --format plain --input data/raw/leipzig.txt --output data/raw/leipzig.jsonl --resume
+python convert_source.py --format nus_xml --input data/raw/nus_sms.xml --output data/raw/nus_sms.jsonl --resume
 
 python prepare_data.py --source opensubtitles --input data/raw/opensubtitles.txt \
-  --mode en --keep-fraction 0.04
+  --mode en --keep-fraction 0.04 --resume
 
 for source in taskmaster gutenberg_dialogue dailydialog leipzig nus_sms; do
-  python prepare_data.py --source "$source" --input "data/raw/$source.jsonl" --mode en
+  python prepare_data.py --source "$source" --input "data/raw/$source.jsonl" --mode en --resume
 done
 ```
 
@@ -108,13 +108,13 @@ scoring sums every SentencePiece piece, and the trie treats contractions as word
 ## 3. Weighted corpora and tokenizer
 
 ```bash
-python mix_stage.py --stage a --split train
-python mix_stage.py --stage b --split train
-python mix_stage.py --stage b --split dev --target-tokens 1000000
+python mix_stage.py --stage a --split train --resume
+python mix_stage.py --stage b --split train --resume
+python mix_stage.py --stage b --split dev --target-tokens 1000000 --resume
 
 python train_tokenizer.py \
   --input data/processed/stage_a_train.jsonl data/processed/stage_b_train.jsonl \
-  --input-weights 1 1 --output-prefix artifacts/spm --vocab-size 6000
+  --input-weights 1 1 --output-prefix artifacts/spm --vocab-size 6000 --resume
 ```
 
 Do not replace the tokenizer after training starts. Every checkpoint stores its
@@ -129,17 +129,11 @@ raw corpus size while the LM itself still trains on the Stage A/B schedules abov
 python train.py --stage pretrain \
   --input data/processed/stage_a_train.jsonl \
   --output artifacts/pretrain.pt --device cuda --precision auto \
-  --micro-batch 128 --accumulation 4
+  --micro-batch 128 --accumulation 4 --checkpoint-every 250 --auto-resume
 ```
 
-Same-stage interruption recovery restores optimizer and step state:
-
-```bash
-python train.py --stage pretrain \
-  --input data/processed/stage_a_train.jsonl \
-  --output artifacts/pretrain.pt --resume artifacts/pretrain.pt \
-  --device cuda --precision auto --micro-batch 128 --accumulation 4
-```
+`--auto-resume` restores the output checkpoint, optimizer, scheduler position,
+token count, and random state after interruption.
 
 ## 5. Qwen soft-target cache
 
@@ -151,18 +145,14 @@ python cache_teacher.py --input data/processed/stage_a_train.jsonl \
   --device cuda --teacher-batch-size 8 --score-micro-batch 32
 ```
 
-Create restartable shards (`--max-examples` is per shard), then merge them:
+Create restartable atomic shards and merge them. Rerunning the same command skips
+completed shards and restarts only an interrupted shard:
 
 ```bash
-for shard in 0 1 2 3; do
-  python cache_teacher.py --input data/processed/stage_a_train.jsonl \
-    --output "data/processed/teacher_a_$shard.jsonl.gz" \
-    --num-shards 4 --shard-index "$shard" --max-examples 125000 \
-    --device cuda --teacher-batch-size 8 --score-micro-batch 32
-done
-
-python merge_jsonl.py --inputs data/processed/teacher_a_*.jsonl.gz \
-  --output data/processed/teacher_a.jsonl.gz
+python cache_teacher_shards.py --input data/processed/stage_a_train.jsonl \
+  --output-dir data/teacher --prefix teacher_a --total-examples 100000 --shards 8 \
+  --merge-output data/teacher/teacher_a_100k.jsonl.gz \
+  --device cuda --teacher-batch-size 4 --score-micro-batch 16
 ```
 
 Each row stores word candidates and teacher log-probabilities, not full teacher
@@ -170,32 +160,71 @@ logits. The shortlist is the union of trie typo corrections, context bigrams, Qw
 generation, and forced gold. Qwen scores a complete word using its tokenizer; the
 student aligns at word level, so incompatible tokenizer IDs are never equated.
 
+## Interactive keyboard probes
+
+These use the Xcode project's real `langdata.bin`, weighted typo trie, n-gram
+counts, blend weights, and correction gates while scoring with this project's
+10.6M checkpoint. Before distillation they default to `artifacts/pretrain.pt`:
+
+```bash
+python next_words_probe.py "i am going" --device cpu
+python correction_probe.py teh --context "i went to" --device cpu
+python next_words_probe.py                         # interactive
+python correction_probe.py                        # interactive
+```
+
+After distillation, select the new checkpoint without changing the harness:
+
+```bash
+python next_words_probe.py "i am going" --checkpoint artifacts/distill.pt --device cpu
+python correction_probe.py teh --context "i went to" \
+  --checkpoint artifacts/distill.pt --device cpu
+```
+
+The default legacy-tools location is
+`/Users/meher/Downloads/xcode-projects/keyboard/tools/lm`. Override it with
+`--legacy-tools /path/to/tools/lm` or the `KEYBOARD_LM_TOOLS` environment variable.
+
 ## 6. Distill, SMS-adapt, then QAT
 
 Cross-stage `--resume` loads weights but starts a fresh optimizer and step counter.
 
 ```bash
-python train.py --stage distill --input data/processed/teacher_a.jsonl.gz \
+python train.py --stage distill --input data/teacher/teacher_a_100k.jsonl.gz \
   --output artifacts/distill.pt --resume artifacts/pretrain.pt \
-  --device cuda --precision auto --micro-batch 128 --accumulation 4
+  --device cuda --precision auto --micro-batch 128 --accumulation 4 \
+  --checkpoint-every 250 --auto-resume
 
 python train.py --stage finetune --input data/processed/stage_b_train.jsonl \
   --output artifacts/finetune.pt --resume artifacts/distill.pt \
-  --device cuda --precision auto --micro-batch 128 --accumulation 4
+  --device cuda --precision auto --micro-batch 128 --accumulation 4 \
+  --checkpoint-every 250 --auto-resume
 
 python cache_teacher.py --input data/processed/stage_b_train.jsonl \
   --index-corpus data/processed/stage_b_train.jsonl \
   --output data/processed/teacher_b.jsonl.gz --max-examples 100000 \
-  --device cuda --teacher-batch-size 8 --score-micro-batch 32
+  --device cuda --teacher-batch-size 8 --score-micro-batch 32 --resume
 
 python train.py --stage qat --input data/processed/teacher_b.jsonl.gz \
   --output artifacts/qat.pt --resume artifacts/finetune.pt \
-  --device cuda --precision auto --micro-batch 128 --accumulation 4
+  --device cuda --precision auto --micro-batch 128 --accumulation 4 \
+  --checkpoint-every 250 --auto-resume
 ```
 
 The loss is 65% hard next-piece cross-entropy, 30% temperature-2 soft candidate
 KL, and 5% periodic whole-word sequence KL. QAT fake-quantizes embeddings and
 linear weights per output channel while retaining FP32 master weights.
+
+### Later Telugu and Tenglish run
+
+The candidate pipeline recognizes Telugu Unicode words and the configuration uses
+`Qwen/Qwen3-4B-Base` for `<te>` and `<xlit>` teacher caches. Pass `--mode te` or
+`--mode xlit` to `cache_teacher_shards.py`. On a 16GB P100, start with
+`--teacher-batch-size 1 --score-micro-batch 8`. A production multilingual model
+must train a new shared SentencePiece model on English, Telugu, and Tenglish before
+pretraining; byte fallback alone is a compatibility fallback, not adequate Telugu
+segmentation. Changing the tokenizer after student training invalidates its
+embedding and output matrices.
 
 ## 7. Held-out evaluation
 
@@ -203,7 +232,7 @@ linear weights per output channel while retaining FP32 master weights.
 python cache_teacher.py --input data/processed/stage_b_dev.jsonl \
   --index-corpus data/processed/stage_b_train.jsonl \
   --output data/processed/teacher_b_dev.jsonl.gz --max-examples 10000 \
-  --device cuda --teacher-batch-size 8 --score-micro-batch 32
+  --device cuda --teacher-batch-size 8 --score-micro-batch 32 --resume
 
 python evaluate.py --checkpoint artifacts/qat.pt \
   --input data/processed/teacher_b_dev.jsonl.gz --output artifacts/eval.json --device cuda

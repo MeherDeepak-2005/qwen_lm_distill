@@ -8,6 +8,7 @@ import hashlib
 import itertools
 import json
 import math
+import os
 from collections import Counter
 from pathlib import Path
 
@@ -190,6 +191,8 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=ROOT / "config.json")
     parser.add_argument("--device", choices=DEVICE_CHOICES)
     parser.add_argument("--model-id")
+    parser.add_argument("--mode", choices=("en", "te", "xlit"),
+                        help="Cache only this mode and select its configured teacher")
     parser.add_argument("--max-examples", type=int)
     parser.add_argument("--teacher-batch-size", type=int)
     parser.add_argument("--score-micro-batch", type=int)
@@ -197,7 +200,12 @@ def main() -> None:
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--num-shards", type=int, default=1)
     parser.add_argument("--mock-teacher", action="store_true", help="Smoke tests only")
+    parser.add_argument("--resume", action="store_true",
+                        help="Skip this atomically-written shard when it already exists")
     args = parser.parse_args()
+    if args.resume and args.output.exists():
+        print(f"resume: teacher shard already completed: {args.output}")
+        return
     if args.num_shards < 1 or not 0 <= args.shard_index < args.num_shards:
         raise ValueError("require 0 <= shard-index < num-shards")
 
@@ -208,7 +216,9 @@ def main() -> None:
     print_device_report(device, teacher_cfg["dtype"])
     index_max_rows = args.index_max_rows or teacher_cfg.get("index_max_rows", 2_000_000)
     trie, ngrams = build_indexes(args.index_corpus or args.input, max_rows=index_max_rows)
-    teacher_model_id = args.model_id or teacher_cfg["model_id"]
+    teacher_model_id = (args.model_id or
+                        teacher_cfg.get("model_by_mode", {}).get(args.mode) or
+                        teacher_cfg["model_id"])
     teacher = MockTeacher() if args.mock_teacher else QwenTeacher(
         teacher_model_id, device, teacher_cfg["dtype"],
     )
@@ -222,6 +232,7 @@ def main() -> None:
     selected = (
         item for item in examples(args.input, teacher_cfg["max_context_words"], cfg["training"]["seed"])
         if item[4] % args.num_shards == args.shard_index
+        and (args.mode is None or item[0].get("mode", "en") == args.mode)
     )
 
     def rows():
@@ -265,7 +276,12 @@ def main() -> None:
         finally:
             progress.close()
 
-    count = write_jsonl(args.output, rows())
+    temporary = (args.output.with_name(args.output.name[:-3] + ".partial.gz")
+                 if args.output.suffix == ".gz"
+                 else args.output.with_name(args.output.name + ".partial"))
+    temporary.unlink(missing_ok=True)
+    count = write_jsonl(temporary, rows())
+    os.replace(temporary, args.output)
     print(json.dumps({"output": str(args.output), "examples": count,
                       "teacher": "mock" if args.mock_teacher else teacher_model_id,
                       "teacher_dtype": getattr(teacher, "dtype_name", None),

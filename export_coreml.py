@@ -66,7 +66,15 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=ROOT / "config.json")
     parser.add_argument("--graph", choices=("next", "candidate"), default="next")
     parser.add_argument("--smoke-predict", action="store_true")
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
+
+    basename = "KeyboardLMNext" if args.graph == "next" else "KeyboardLMScorer"
+    expected_manifest = args.output_dir / f"{basename}_manifest.json"
+    expected_int8 = args.output_dir / f"{basename}_int8.mlpackage"
+    if args.resume and expected_manifest.exists() and expected_int8.exists():
+        print(f"resume: Core ML export already completed: {expected_int8}")
+        return
 
     try:
         import coremltools as ct

@@ -63,6 +63,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--keep-fraction", type=float, default=1.0,
                         help="Deterministically retain this fraction of groups before cleaning")
+    parser.add_argument("--resume", action="store_true",
+                        help="Skip this source when all final split files already exist")
     args = parser.parse_args()
     if not 0 < args.keep_fraction <= 1:
         raise ValueError("--keep-fraction must be in (0, 1]")
@@ -71,6 +73,9 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     paths = {split: args.output_dir / f"{args.source}.{split}.jsonl"
              for split in ("train", "dev", "test")}
+    if args.resume and all(path.exists() for path in paths.values()):
+        print(f"resume: already completed {args.source} in {args.output_dir}")
+        return
     temporary = {split: path.with_suffix(path.suffix + ".tmp") for split, path in paths.items()}
     for path in temporary.values():
         path.unlink(missing_ok=True)

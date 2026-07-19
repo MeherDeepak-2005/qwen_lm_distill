@@ -48,6 +48,8 @@ def main() -> None:
     parser.add_argument("--tokenizer", type=Path, default=ROOT / "artifacts" / "spm.model")
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts" / "student.pt")
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--auto-resume", action="store_true",
+                        help="Resume --output when present; otherwise initialize from --resume")
     parser.add_argument("--config", type=Path, default=ROOT / "config.json")
     parser.add_argument("--device", choices=DEVICE_CHOICES)
     parser.add_argument("--precision", choices=PRECISION_CHOICES)
@@ -55,6 +57,8 @@ def main() -> None:
     parser.add_argument("--steps", type=int, help="Distillation/QAT step override")
     parser.add_argument("--micro-batch", type=int, help="Override sequences per forward pass")
     parser.add_argument("--accumulation", type=int, help="Override gradient accumulation")
+    parser.add_argument("--checkpoint-every", type=int,
+                        help="Override checkpoint interval; the same atomic file is replaced")
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -77,8 +81,12 @@ def main() -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=train_cfg["weight_decay"])
     start_step = tokens_seen = 0
     best_loss = float("inf")
-    if args.resume:
-        checkpoint = torch.load(args.resume, map_location="cpu")
+    resume_path = args.output if args.auto_resume and args.output.exists() else args.resume
+    if resume_path:
+        print(json.dumps({"loading_checkpoint": str(resume_path),
+                          "auto_resume": bool(args.auto_resume and resume_path == args.output)}),
+              flush=True)
+        checkpoint = torch.load(resume_path, map_location="cpu")
         model.load_state_dict(checkpoint["model"])
         if checkpoint.get("tokenizer_sha256") != tokenizer_hash(args.tokenizer):
             raise RuntimeError("checkpoint/tokenizer hash mismatch")
@@ -100,7 +108,8 @@ def main() -> None:
 
     batch_size = args.micro_batch or train_cfg["micro_batch_sequences"]
     accumulation = args.accumulation or train_cfg["gradient_accumulation"]
-    if batch_size < 1 or accumulation < 1:
+    checkpoint_every = args.checkpoint_every or train_cfg["checkpoint_every"]
+    if batch_size < 1 or accumulation < 1 or checkpoint_every < 1:
         raise ValueError("batch size and accumulation must be positive")
     if args.stage in ("pretrain", "finetune"):
         default_target = cfg["data"]["stage_a_target_tokens" if args.stage == "pretrain" else "stage_b_target_tokens"]
@@ -175,7 +184,7 @@ def main() -> None:
                                    "tokens": tokens_seen, "lr": learning_rate, **running,
                                    "steps_per_second": (step + 1 - start_step) / elapsed,
                                    "peak_device_mb": peak_memory_mb(device)}))
-        if (step + 1) % train_cfg["checkpoint_every"] == 0:
+        if (step + 1) % checkpoint_every == 0:
             tqdm.write(f"saving checkpoint: {args.output}")
             save_checkpoint(args.output, model, optimizer, step + 1, tokens_seen,
                             args.stage, cfg, args.tokenizer, best_loss)

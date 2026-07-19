@@ -37,6 +37,8 @@ def main() -> None:
     parser.add_argument("--processed-dir", type=Path, default=ROOT / "data" / "processed")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--target-tokens", type=int, help="Whitespace-token exposure target")
+    parser.add_argument("--resume", action="store_true",
+                        help="Skip mixing when the final atomic output already exists")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -45,6 +47,9 @@ def main() -> None:
     weights: dict[str, float] = cfg["data"][key]
     target = args.target_tokens or cfg["data"][target_key]
     output = args.output or ROOT / "data" / "processed" / f"stage_{args.stage}_{args.split}.jsonl"
+    if args.resume and output.exists():
+        print(f"resume: already completed {output}")
+        return
     missing = [name for name in weights if not (args.processed_dir / f"{name}.{args.split}.jsonl").exists()]
     if missing:
         raise FileNotFoundError(f"missing normalized sources: {missing}")
@@ -70,7 +75,7 @@ def main() -> None:
         finally:
             progress.close()
 
-    count = write_jsonl(output, rows())
+    count = write_jsonl(output, rows(), atomic=True)
     print(json.dumps({"output": str(output), "lines": count, "approx_tokens": emitted_tokens,
                       "weights": weights}, indent=2))
 
